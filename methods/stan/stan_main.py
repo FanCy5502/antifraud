@@ -102,6 +102,9 @@ def att_train(
         pred = np.array(pred)
         print(
             f"test set | auc: {roc_auc_score(true, pred):.4f}, F1: {f1_score(true, pred, average='macro'):.4f}, AP: {average_precision_score(true, pred):.4f}")
+        model_path = 'mymodels/my_stan.pth'
+        torch.save(model, model_path)
+        print("保存模型权重的位置是 %s",model_path)
         # print(confusion_matrix(true, pred))
 
 

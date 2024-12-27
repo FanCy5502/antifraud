@@ -22,6 +22,69 @@ DATADIR = os.path.join(os.path.dirname(
     os.path.abspath(__file__)), "..", "data/")
 
 
+def optimized_featmap_gen(tmp_df):
+    """
+    特征工程优化尝试
+    :参数 tmp_df: 输入数据dataframe,字段： ['Time', 'Amount', 'Target', 'Location', 'Type']
+    :返回值: 加入新提取特征的DataFrame
+    """
+    # 为特征生成定义时间窗口
+    time_span = [2, 3, 5, 15, 20, 50, 100, 150, 200, 300, 864, 2590, 5100, 10000, 24000]
+    time_name = [str(i) for i in time_span]
+    
+    # 保持时序性：数据按时间进行升序排序
+    tmp_df = tmp_df.sort_values(by='Time').reset_index(drop=True)
+    
+    #  {特征：数据} 的列表
+    feature_data = []
+    
+    for idx in tqdm(range(len(tmp_df))):
+        row = tmp_df.iloc[idx]
+        temp_time = row.Time
+        temp_amt = row.Amount
+        
+        # 使用切片操作代替直接的逐行筛选
+        start_idx = max(0, idx - 24000)  # 仅考虑在最大时间窗口中的数据
+        window_df = tmp_df.iloc[start_idx:idx+1]
+        window_df = window_df[window_df.Time >= temp_time - max(time_span)]
+        
+        # 生成每个时间窗口的特征
+        features = {'Index': idx}
+        for length, tname in zip(time_span, time_name):
+            time_filtered = window_df[window_df.Time >= temp_time - length]
+            
+            if time_filtered.empty:
+                features.update({
+                    f'trans_at_01avg_{tname}': 0,
+                    f'trans_at_totl_{tname}': 0,
+                    f'trans_at_std_{tname}': 0,
+                    f'trans_at_bias_{tname}': temp_amt,
+                    f'trans_at_num_{tname}': 0,
+                    f'trans_target_num_{tname}': 0,
+                    f'trans_location_num_{tname}': 0,
+                    f'trans_type_num_{tname}': 0,
+                })
+            else:
+                features.update({
+                    f'trans_at_01avg_{tname}': time_filtered['Amount'].mean(),
+                    f'trans_at_totl_{tname}': time_filtered['Amount'].sum(),
+                    f'trans_at_std_{tname}': time_filtered['Amount'].std(),
+                    f'trans_at_bias_{tname}': temp_amt - time_filtered['Amount'].mean(),
+                    f'trans_at_num_{tname}': len(time_filtered),
+                    f'trans_target_num_{tname}': len(time_filtered['Target'].unique()),
+                    f'trans_location_num_{tname}': len(time_filtered['Location'].unique()),
+                    f'trans_type_num_{tname}': len(time_filtered['Type'].unique()),
+                })
+                features[f'trans_amount_rate_{tname}'] = temp_amt / (time_filtered['Amount'].mean() + 1e-6)
+                features[f'time_since_last_tx'] = temp_time - time_filtered['Time'].iloc[-1] if len(time_filtered) > 1 else 0
+                features[f'high_freq_flag_{tname}'] = int(len(time_filtered) > 10)  # Example threshold
+                features[f'location_ratio_{tname}'] = len(time_filtered[time_filtered['Location'] == row['Location']]) / (len(time_filtered) + 1e-6)
+        
+        feature_data.append(features)
+    
+    return pd.concat([tmp_df, pd.DataFrame(feature_data)], axis = 1)
+    
+
 def featmap_gen(tmp_df=None):
     """
     Handle S-FFSD dataset and do some feature engineering
@@ -39,10 +102,11 @@ def featmap_gen(tmp_df=None):
         temp_time = new_df.Time
         temp_amt = new_df.Amount
         for length, tname in zip(time_span, time_name):
-            lowbound = (time_list >= temp_time - length)
-            upbound = (time_list <= temp_time)
-            correct_data = tmp_df[lowbound & upbound]
-            new_df['trans_at_avg_{}'.format(
+            # 时间窗口的上下边沿
+            lowbound = (time_list >= temp_time - length) # 离当前遍历点时间的一个窗口后
+            upbound = (time_list <= temp_time)  # 不超过当前时间点（因为不能透露未来）
+            correct_data = tmp_df[lowbound & upbound] # 提取在时间窗口内部的数据
+            new_df['trans_at_01avg_{}'.format(
                 tname)] = correct_data['Amount'].mean()
             new_df['trans_at_totl_{}'.format(
                 tname)] = correct_data['Amount'].sum()
@@ -189,88 +253,89 @@ if __name__ == "__main__":
 
     set_seed(42)
 
-    # %%
-    """
-        For Yelpchi dataset
-        Code partially from https://github.com/YingtongDou/CARE-GNN
-    """
-    print(f"processing YELP data...")
-    yelp = loadmat(os.path.join(DATADIR, 'YelpChi.mat'))
-    net_rur = yelp['net_rur']
-    net_rtr = yelp['net_rtr']
-    net_rsr = yelp['net_rsr']
-    yelp_homo = yelp['homo']
+    # # %%
+    # """
+    #     For Yelpchi dataset
+    #     Code partially from https://github.com/YingtongDou/CARE-GNN
+    # """
+    # print('DATADIR=',DATADIR)
+    # print(f"processing YELP data...")
+    # yelp = loadmat(os.path.join(DATADIR, 'YelpChi.mat'))
+    # net_rur = yelp['net_rur']
+    # net_rtr = yelp['net_rtr']
+    # net_rsr = yelp['net_rsr']
+    # yelp_homo = yelp['homo']
 
-    sparse_to_adjlist(net_rur, os.path.join(
-        DATADIR, "yelp_rur_adjlists.pickle"))
-    sparse_to_adjlist(net_rtr, os.path.join(
-        DATADIR, "yelp_rtr_adjlists.pickle"))
-    sparse_to_adjlist(net_rsr, os.path.join(
-        DATADIR, "yelp_rsr_adjlists.pickle"))
-    sparse_to_adjlist(yelp_homo, os.path.join(
-        DATADIR, "yelp_homo_adjlists.pickle"))
+    # sparse_to_adjlist(net_rur, os.path.join(
+    #     DATADIR, "yelp_rur_adjlists.pickle"))
+    # sparse_to_adjlist(net_rtr, os.path.join(
+    #     DATADIR, "yelp_rtr_adjlists.pickle"))
+    # sparse_to_adjlist(net_rsr, os.path.join(
+    #     DATADIR, "yelp_rsr_adjlists.pickle"))
+    # sparse_to_adjlist(yelp_homo, os.path.join(
+    #     DATADIR, "yelp_homo_adjlists.pickle"))
 
-    data_file = yelp
-    labels = pd.DataFrame(data_file['label'].flatten())[0]
-    feat_data = pd.DataFrame(data_file['features'].todense().A)
-    # load the preprocessed adj_lists
-    with open(os.path.join(DATADIR, "yelp_homo_adjlists.pickle"), 'rb') as file:
-        homo = pickle.load(file)
-    file.close()
-    src = []
-    tgt = []
-    for i in homo:
-        for j in homo[i]:
-            src.append(i)
-            tgt.append(j)
-    src = np.array(src)
-    tgt = np.array(tgt)
-    g = dgl.graph((src, tgt))
-    g.ndata['label'] = torch.from_numpy(labels.to_numpy()).to(torch.long)
-    g.ndata['feat'] = torch.from_numpy(
-        feat_data.to_numpy()).to(torch.float32)
-    dgl.data.utils.save_graphs(DATADIR + "graph-yelp.bin", [g])
+    # data_file = yelp
+    # labels = pd.DataFrame(data_file['label'].flatten())[0]
+    # feat_data = pd.DataFrame(data_file['features'].todense().A)
+    # # load the preprocessed adj_lists
+    # with open(os.path.join(DATADIR, "yelp_homo_adjlists.pickle"), 'rb') as file:
+    #     homo = pickle.load(file)
+    # file.close()
+    # src = []
+    # tgt = []
+    # for i in homo:
+    #     for j in homo[i]:
+    #         src.append(i)
+    #         tgt.append(j)
+    # src = np.array(src)
+    # tgt = np.array(tgt)
+    # g = dgl.graph((src, tgt))
+    # g.ndata['label'] = torch.from_numpy(labels.to_numpy()).to(torch.long)
+    # g.ndata['feat'] = torch.from_numpy(
+    #     feat_data.to_numpy()).to(torch.float32)
+    # dgl.data.utils.save_graphs(DATADIR + "graph-yelp.bin", [g])
 
-    # %%
-    """
-        For Amazon dataset
-    """
-    print(f"processing AMAZON data...")
-    amz = loadmat(os.path.join(DATADIR, 'Amazon.mat'))
-    net_upu = amz['net_upu']
-    net_usu = amz['net_usu']
-    net_uvu = amz['net_uvu']
-    amz_homo = amz['homo']
+    # # %%
+    # """
+    #     For Amazon dataset
+    # """
+    # print(f"processing AMAZON data...")
+    # amz = loadmat(os.path.join(DATADIR, 'Amazon.mat'))
+    # net_upu = amz['net_upu']
+    # net_usu = amz['net_usu']
+    # net_uvu = amz['net_uvu']
+    # amz_homo = amz['homo']
 
-    sparse_to_adjlist(net_upu, os.path.join(
-        DATADIR, "amz_upu_adjlists.pickle"))
-    sparse_to_adjlist(net_usu, os.path.join(
-        DATADIR, "amz_usu_adjlists.pickle"))
-    sparse_to_adjlist(net_uvu, os.path.join(
-        DATADIR, "amz_uvu_adjlists.pickle"))
-    sparse_to_adjlist(amz_homo, os.path.join(
-        DATADIR, "amz_homo_adjlists.pickle"))
+    # sparse_to_adjlist(net_upu, os.path.join(
+    #     DATADIR, "amz_upu_adjlists.pickle"))
+    # sparse_to_adjlist(net_usu, os.path.join(
+    #     DATADIR, "amz_usu_adjlists.pickle"))
+    # sparse_to_adjlist(net_uvu, os.path.join(
+    #     DATADIR, "amz_uvu_adjlists.pickle"))
+    # sparse_to_adjlist(amz_homo, os.path.join(
+    #     DATADIR, "amz_homo_adjlists.pickle"))
 
-    data_file = amz
-    labels = pd.DataFrame(data_file['label'].flatten())[0]
-    feat_data = pd.DataFrame(data_file['features'].todense().A)
-    # load the preprocessed adj_lists
-    with open(DATADIR + 'amz_homo_adjlists.pickle', 'rb') as file:
-        homo = pickle.load(file)
-    file.close()
-    src = []
-    tgt = []
-    for i in homo:
-        for j in homo[i]:
-            src.append(i)
-            tgt.append(j)
-    src = np.array(src)
-    tgt = np.array(tgt)
-    g = dgl.graph((src, tgt))
-    g.ndata['label'] = torch.from_numpy(labels.to_numpy()).to(torch.long)
-    g.ndata['feat'] = torch.from_numpy(
-        feat_data.to_numpy()).to(torch.float32)
-    dgl.data.utils.save_graphs(DATADIR + "graph-amazon.bin", [g])
+    # data_file = amz
+    # labels = pd.DataFrame(data_file['label'].flatten())[0]
+    # feat_data = pd.DataFrame(data_file['features'].todense().A)
+    # # load the preprocessed adj_lists
+    # with open(DATADIR + 'amz_homo_adjlists.pickle', 'rb') as file:
+    #     homo = pickle.load(file)
+    # file.close()
+    # src = []
+    # tgt = []
+    # for i in homo:
+    #     for j in homo[i]:
+    #         src.append(i)
+    #         tgt.append(j)
+    # src = np.array(src)
+    # tgt = np.array(tgt)
+    # g = dgl.graph((src, tgt))
+    # g.ndata['label'] = torch.from_numpy(labels.to_numpy()).to(torch.long)
+    # g.ndata['feat'] = torch.from_numpy(
+    #     feat_data.to_numpy()).to(torch.float32)
+    # dgl.data.utils.save_graphs(DATADIR + "graph-amazon.bin", [g])
 
     # # %%
     # """
@@ -278,7 +343,7 @@ if __name__ == "__main__":
     # """
     print(f"processing S-FFSD data...")
     data = pd.read_csv(os.path.join(DATADIR, 'S-FFSD.csv'))
-    data = featmap_gen(data.reset_index(drop=True))
+    data = optimized_featmap_gen(data.reset_index(drop=True))
     data.replace(np.nan, 0, inplace=True)
     data.to_csv(os.path.join(DATADIR, 'S-FFSDneofull.csv'), index=None)
     data = pd.read_csv(os.path.join(DATADIR, 'S-FFSDneofull.csv'))

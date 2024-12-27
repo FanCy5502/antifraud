@@ -67,6 +67,7 @@ def base_load_data(args: dict):
     num_trans = len(feat_df)
     trf, tef, trl, tel = train_test_split(
         features, labels, train_size=train_size, stratify=labels, shuffle=True)
+    # 
     trf_file, tef_file, trl_file, tel_file = args['trainfeature'], args[
         'testfeature'], args['trainlabel'], args['testlabel']
     np.save(trf_file, trf)

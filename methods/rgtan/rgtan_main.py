@@ -1,6 +1,6 @@
 import os
 from dgl.dataloading import MultiLayerFullNeighborSampler
-from dgl.dataloading import NodeDataLoader
+from dgl.dataloading import DataLoader
 from torch.optim.lr_scheduler import MultiStepLR
 import numpy as np
 import pandas as pd
@@ -47,12 +47,13 @@ def rgtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, 
     labels = torch.from_numpy(y.values).long().to(device)
     loss_fn = nn.CrossEntropyLoss().to(device)
     for fold, (trn_idx, val_idx) in enumerate(kfold.split(feat_df.iloc[train_idx], y_target)):
+    
         print(f'Training fold {fold + 1}')
         trn_ind, val_ind = torch.from_numpy(np.array(train_idx)[trn_idx]).long().to(
             device), torch.from_numpy(np.array(train_idx)[val_idx]).long().to(device)
 
         train_sampler = MultiLayerFullNeighborSampler(args['n_layers'])
-        train_dataloader = NodeDataLoader(graph,
+        train_dataloader = DataLoader(graph,
                                           trn_ind,
                                           train_sampler,
                                           device=device,
@@ -63,7 +64,7 @@ def rgtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, 
                                           num_workers=0
                                           )
         val_sampler = MultiLayerFullNeighborSampler(args['n_layers'])
-        val_dataloader = NodeDataLoader(graph,
+        val_dataloader = DataLoader(graph,
                                         val_ind,
                                         val_sampler,
                                         use_ddp=False,
@@ -82,7 +83,7 @@ def rgtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, 
                       drop=args['dropout'],
                       device=device,
                       gated=args['gated'],
-                      ref_df=feat_df.iloc[train_idx],
+                      ref_df=feat_df,
                       cat_features=cat_feat,
                       neigh_features=nei_feat,
                       nei_att_head=nei_att_head).to(device)
@@ -99,7 +100,9 @@ def rgtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, 
             train_loss_list = []
             # train_acc_list = []
             model.train()
+
             for step, (input_nodes, seeds, blocks) in enumerate(train_dataloader):
+
                 # print(f"loading batch data...")
                 batch_inputs, batch_work_inputs, batch_neighstat_inputs, batch_labels, lpa_labels = load_lpa_subtensor(num_feat, cat_feat, nei_feat, neigh_padding_dict, labels,
                                                                                                                        seeds, input_nodes, device, blocks)
@@ -191,7 +194,7 @@ def rgtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, 
         print("Best val_loss is: {:.7f}".format(earlystoper.best_cv))
         test_ind = torch.from_numpy(np.array(test_idx)).long().to(device)
         test_sampler = MultiLayerFullNeighborSampler(args['n_layers'])
-        test_dataloader = NodeDataLoader(graph,
+        test_dataloader = DataLoader(graph,
                                          test_ind,
                                          test_sampler,
                                          use_ddp=False,
@@ -237,6 +240,10 @@ def rgtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, 
     print("test AUC:", roc_auc_score(y_target, test_score))
     print("test f1:", f1_score(y_target, test_score1, average="macro"))
     print("test AP:", average_precision_score(y_target, test_score))
+
+    model_path = 'mymodels/my_rgtan_yelp.pth'
+    torch.save(model, model_path)
+    print("保存模型权重的位置是 %s",model_path)
 
 
 def loda_rgtan_data(dataset: str, test_size: float):
